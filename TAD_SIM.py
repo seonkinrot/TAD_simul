@@ -277,9 +277,9 @@ def simulated_imdata(hybes,cell,err_rate=0.032504222398951552):
         hybe_points,ground_truth=[],[]
         for chr_in_hybe,tad_in_hybe in zip(chrs_in_hybe,tad_ids_in_hybe):
             if np.random.rand()>err_rate: #probability of missing a TAD in imaging
-                hybe_points.append(cell[chr_in_hybe][tad_in_hybe])
+                hybe_poinappend(cell[chr_in_hybe][tad_in_hybe])
                 ground_truth.append(chr_in_hybe)
-        hybes_points.append(hybe_points)
+        hybes_poinappend(hybe_points)
         tot_ground_truth.append(ground_truth)
     hybes_points = map(np.array,hybes_points)
     return hybes_points,tot_ground_truth
@@ -292,7 +292,7 @@ def unique_classif(w_matrix,conf=None):
     """
     if conf is None:
         def conf(list_):
-            #given a projection compute the "confidence" for it as the difference between the two smalles distance weights.
+            #given a projection compute the "confidence" for it as the difference between the two smalles distance weigh
             unk = np.unique(list_)#this also sorts
             if len(unk)<2:
                 return 0.
@@ -349,7 +349,7 @@ def decoder(hybes_points,hybes,tot_ground_truth,no_hom=1,n_chr=23):
                 difs = point - hybe_point
                 #min_L1_dist = np.min(np.sum(np.abs(difs),axis=-1))
                 min_L1_dist = np.min(np.sqrt(np.sum(difs**2,axis=-1)))
-                min_L1_dists.append(min_L1_dist)
+                min_L1_disappend(min_L1_dist)
             min_L1_dists = np.array(min_L1_dists)#nearest neighbour distance across hybes for point in reference hybe
 
             projection = np.dot(possible_projections_,min_L1_dists)
@@ -373,4 +373,52 @@ def decoder(hybes_points,hybes,tot_ground_truth,no_hom=1,n_chr=23):
         goods+=good
         bads+=bad
                       
+    return goods,bads,chromosome_ids_all
+def refine_decoder(hybes_points,hybes,prev_decoder_output,tot_ground_truth,no_hom=1,n_chr=23,noTads=100,fr_nn=0.8):
+    point_col = flatten(im_data)
+    chr_col = flatten(prev_decoder_output)
+    point_part = partition_map(point_col,chr_col)
+    #What chromosomes appear in which hybe
+    possible_chrs_hybes=[]
+    for hybe in hybes:
+        possible_chrs_hybes.append(np.where(hybe>0)[0]%n_chr)
+    ##
+    goods,bads=0,0
+    chromosome_ids_all = []
+    #Iterate through all the points in the hybes. The current hybe I call it ref hybe
+    for id_ref in range(len(hybes_points)):
+        ###Given id_ref hybe compute the projection space
+        hybes_points_ref = hybes_points[id_ref]
+        
+        possible_chrs = possible_chrs_hybes[id_ref]#np.where(hybes[id_ref]>0)[0]
+        weight_chr = []
+        for point in hybes_points_ref:
+            min_L1_dists=[]#distances to nearest neighbors across hybes for point
+            for pos_chr in possible_chrs:
+                difs = [point] - np.array(point_part[pos_chr],dtype=float)
+                dists = np.sqrt(np.sum(difs**2,axis=-1))
+                dists = np.sort(dists)[:int(noTads*fr_nn)]
+                #min_L1_dist = np.min(np.sum(np.abs(difs),axis=-1))
+                min_L1_dist = np.median(dists)
+                min_L1_disappend(min_L1_dist)
+            min_L1_dists = np.array(min_L1_dists)#nearest neighbour distance across hybes for point in reference hybe
+            weight_chr.append(min_L1_dists)
+        ##After computing a no of candidate chromosomes x no of points weight matrix projections_point
+        ## Decide on best assigment.
+        chr_picks = unique_classif(weight_chr,conf=None)
+        
+        
+        points_identities,chr_identities = zip(*chr_picks)
+        #chr_identities goes from 0 to number of chromosomes is ref hybe in maximum confidence order
+        chromosome_ids0 = np.arange(len(points_identities))
+        chromosome_ids0[np.array(points_identities)]=np.array(chr_identities)
+        chromosome_ids = possible_chrs[chromosome_ids0]%n_chr
+        chromosome_ids_all.append(chromosome_ids)
+        #chromosome_ids is chromosome prediction (0-22) in order of the points in ref hybe.
+        #Compare to ground truth calculated during simulation of imaging data.
+        non_deg_poss=np.array(tot_ground_truth[id_ref])%n_chr
+        good = np.sum(non_deg_poss==chromosome_ids) #up to degeneracy due to homologous chromosomes
+        bad = np.sum(non_deg_poss!=chromosome_ids)
+        goods+=good
+        bads+=bad     
     return goods,bads,chromosome_ids_all
