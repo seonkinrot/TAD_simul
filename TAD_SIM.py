@@ -277,9 +277,9 @@ def simulated_imdata(hybes,cell,err_rate=0.032504222398951552):
         hybe_points,ground_truth=[],[]
         for chr_in_hybe,tad_in_hybe in zip(chrs_in_hybe,tad_ids_in_hybe):
             if np.random.rand()>err_rate: #probability of missing a TAD in imaging
-                hybe_poinappend(cell[chr_in_hybe][tad_in_hybe])
+                hybe_points.append(cell[chr_in_hybe][tad_in_hybe])
                 ground_truth.append(chr_in_hybe)
-        hybes_poinappend(hybe_points)
+        hybes_points.append(hybe_points)
         tot_ground_truth.append(ground_truth)
     hybes_points = map(np.array,hybes_points)
     return hybes_points,tot_ground_truth
@@ -292,7 +292,7 @@ def unique_classif(w_matrix,conf=None):
     """
     if conf is None:
         def conf(list_):
-            #given a projection compute the "confidence" for it as the difference between the two smalles distance weigh
+            #given a projection compute the "confidence" for it as the difference between the two smalles distance weights.
             unk = np.unique(list_)#this also sorts
             if len(unk)<2:
                 return 0.
@@ -349,7 +349,7 @@ def decoder(hybes_points,hybes,tot_ground_truth,no_hom=1,n_chr=23):
                 difs = point - hybe_point
                 #min_L1_dist = np.min(np.sum(np.abs(difs),axis=-1))
                 min_L1_dist = np.min(np.sqrt(np.sum(difs**2,axis=-1)))
-                min_L1_disappend(min_L1_dist)
+                min_L1_dists.append(min_L1_dist)
             min_L1_dists = np.array(min_L1_dists)#nearest neighbour distance across hybes for point in reference hybe
 
             projection = np.dot(possible_projections_,min_L1_dists)
@@ -400,7 +400,7 @@ def refine_decoder(hybes_points,hybes,prev_decoder_output,tot_ground_truth,no_ho
                 dists = np.sort(dists)[:int(noTads*fr_nn)]
                 #min_L1_dist = np.min(np.sum(np.abs(difs),axis=-1))
                 min_L1_dist = np.median(dists)
-                min_L1_disappend(min_L1_dist)
+                min_L1_dists.append(min_L1_dist)
             min_L1_dists = np.array(min_L1_dists)#nearest neighbour distance across hybes for point in reference hybe
             weight_chr.append(min_L1_dists)
         ##After computing a no of candidate chromosomes x no of points weight matrix projections_point
