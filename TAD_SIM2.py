@@ -6,10 +6,11 @@ This are the functions for TAD simulations of whole chromosomes in a cell
 import numpy as np
 import cPickle as pickle
 import glob
+import itertools
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, RadioButtons
 import cPickle as pickle
-#Useful functions
+
 def imshow3d(Im, axis=0, **kwargs):
     """
     Display a 3d ndarray with a slider to move along the 0th dimension.
@@ -49,7 +50,7 @@ def chromosomes(nuc_dia=10000,pixel_sz=100,nchr=46,return_im=False,plt_val=False
     
     Return list of chromosomes and pixels in their territory (x,y,z locations in unit radius)
     """
-    #coordinates for 46 sphere centers
+    #coordinates for n sphere centers
     #(equal size spheres in a unit sphere)
     #see:https://oeis.org/A084827/a084827.txt
     if nchr==23:
@@ -187,9 +188,8 @@ def TAD_generator(xyzChr,noTADs=100,udist=-0.44276236166846844,sigmadist=0.57416
     return np.array(tads)
     
 #Encoder - construct a matrix hybes of length number of hybes x number of chromosomes 
-#each containing the id of the tad in the hybe (0 means the TAD is missing from that hybe)
-import itertools
-import numpy as np
+#each containing the id of the tad in the hybe (0 means the TAD is missing from that hybe).
+#This effectively constructs a code identifying each chromosome
 def combs_to_code(combs_eq_sp,nchr=None):
     """Construct from combs list to code binary array
     For example changes:
@@ -201,6 +201,7 @@ def combs_to_code(combs_eq_sp,nchr=None):
     for i,comb in enumerate(combs_eq_sp):
         codes[i][list(comb)] = 1
     return codes
+    
 def test_code(codes):
     """If chromosme i apears in a subset of hybes. Check to see that no other chromosomes appears in the same set."""
     nchr = codes.shape[-1]
@@ -225,6 +226,7 @@ def patch_code(codes,target):
             del_pos = np.random.choice(pos0s,size=np.abs(ndel1s),replace=False)
             code[del_pos]=1
     return codes
+    
 def code_encoder(nchr=23,ntads=100,nlabel_=2,no_hom=1):
     """Master function for the encoder
     nchr is the number of *unique* - i.e. non-homologous - chromosomes
@@ -249,6 +251,7 @@ def code_encoder(nchr=23,ntads=100,nlabel_=2,no_hom=1):
     hybes=np.cumsum(codes,axis=0)*codes
     hybes=np.concatenate([hybes.T]*no_hom).T
     return hybes
+    
 def partition_map(list_,map_):
     """
     Inputs
@@ -259,6 +262,7 @@ def partition_map(list_,map_):
     list__=np.array(list_,dtype=object)
     map__=np.array(map_)
     return [list(list__[map__==element]) for element in np.unique(map__)]
+    
 def simulated_imdata(hybes,cell,err_rate=0.032504222398951552):
     """
     Inputs:
@@ -285,16 +289,17 @@ def simulated_imdata(hybes,cell,err_rate=0.032504222398951552):
     return hybes_points,tot_ground_truth
 def flatten(list_):
     return [item for sublist in list_ for item in sublist]
+    
 def unique_classif(w_matrix,conf=None):
     """
-    Given a weight matrix and a confidence function (optional) operation on 0th dimention compute the best unique classification
+    Given a weight matrix 'w_matrix' and a confidence function (optional) operation on 0th dimention compute the best unique classification
     and return it as pairs.
     """
-    if conf is None:
+    if conf is None: #define default confidence funciton as difference between two "best" options
         def conf(list_):
-            #given a projection compute the "confidence" for it as the difference between the two smalles distance weights.
-            unk = np.unique(list_)#this also sorts
-            if len(unk)<2:
+            #given a projection compute the "confidence" for it as the difference between the two top options
+            unk = np.sort(list_)
+            if len(unk)<2: #return 0 confidence if only 1 option
                 return 0.
             else:
                 return unk[1]-unk[0]
@@ -303,7 +308,7 @@ def unique_classif(w_matrix,conf=None):
     chr_ids = np.arange(weight_matrix.shape[1])
 
     chr_picks=[]
-    while weight_matrix.shape[0]>0 and weight_matrix.shape[1]>0:
+    while weight_matrix.shape[0]>0 and weight_matrix.shape[1]>0: #keep a list of unassigned points and chrs, assign one every round and remove it
         confs = map(conf,weight_matrix)# list of confidence for the remaining points across the remaining chrs.
         point_ind = np.argmax(confs)# the id of the point with the highest confidence
         chr_ind = np.argmin(weight_matrix[point_ind])  # the id ot the chromosome assiged to the most confident point
@@ -314,67 +319,86 @@ def unique_classif(w_matrix,conf=None):
         point_ids = point_ids[point_ind_keep]
         chr_ids = chr_ids[chr_ind_keep]
         weight_matrix = weight_matrix[point_ind_keep,:]
-        weight_matrix = weight_matrix[:,chr_ind_keep] #killing rows and columns
+        weight_matrix = weight_matrix[:,chr_ind_keep] #killing rows and columns of assigned pair
     return chr_picks
+
 #Decoder - Given hybes_points and hybes predict chr id
 def decoder(hybes_points,hybes,tot_ground_truth,n_chr=23):
+    """
+    Compares simulated data with encoding scheme to recreate ground truth by computing distances with nearest neighbors in other hybe rounds
+    and projecting onto possible encoding scheme space
+    Inputs:
+    hybe_points - list of #hybes lists with #pts in hybe 3D positions (the imaging data)
+    hybes - the encoding scheme. A matrix of #hybes x #chrs containing binary codes for chr identity
+    tot_ground_truth - the actual chromosome association of each point in hybes_points (for assessing performance)
+    n_chr - bynber of distinct (non-homologous) chrs
+    Returns:
+    goods, bads - number of correct and incorrect chr assignment made by the decoder (compared to ground truth), respectively
+    chromosome_ids_all - list of #hybes lists with #pts entries corresponding to chr identities of each data point
+    """
     #What chromosomes appear in which hybe
     possible_chrs_hybes=[]
     for hybe in hybes:
-        possible_chrs_hybes.append(np.where(hybe>0)[0])
-    ##
-    goods,bads=0,0
+        possible_chrs_hybes.append(np.where(hybe>0)[0]) #list of chrs appearing in each hybe
+    goods,bads=0,0 #initialize counters for QA
     chromosome_ids_all = []
-    #Iterate through all the points in the hybes. The current hybe I call it ref hybe
+    #Iterate through all the points in each hybe. The current hybe is id_ref
     for id_ref in range(len(hybes_points)):
         ###Given id_ref hybe compute the projection space
         hybes_points_ref = hybes_points[id_ref]
-        
-        possible_chrs = possible_chrs_hybes[id_ref]#np.where(hybes[id_ref]>0)[0]
-        
+        possible_chrs = possible_chrs_hybes[id_ref] #chromosomes appearing in this hybe
         #compute possible projections: possibble chromosome x numbe of hybes - binary
         possible_projections = np.zeros([len(possible_chrs),len(possible_chrs_hybes)],dtype=int)
         for i,chr_T in enumerate(possible_chrs):
             for j,possible_chrs_hybe in enumerate(possible_chrs_hybes):
-                possible_projections[i,j]=chr_T in possible_chrs_hybe
-        sum_proj = np.array([np.sum(possible_projections,axis=1)])
-        #sum_proj[sum_proj==0]=1
+                possible_projections[i,j]=chr_T in possible_chrs_hybe #matrix showing for each possible chromosome in this hybe, in which hybes it appears overall
+        sum_proj = np.array([np.sum(possible_projections,axis=1)]) 
         possible_projections_ = possible_projections*1./sum_proj.T #the normalized projection space
-        
-        ###Compute 
+        #Compute projection of nearest neighbor distances onto hybe scheme space
         projections_point = []
-        for point in hybes_points_ref:
+        for point in hybes_points_ref: #an imaged TAD in this round
             min_L1_dists=[]#distances to nearest neighbors across hybes for point
-            for hybe_point in hybes_points:
+            for hybe_point in hybes_points: #go over all hybes
                 difs = point - hybe_point
-                #min_L1_dist = np.min(np.sum(np.abs(difs),axis=-1))
-                min_L1_dist = np.min(np.sqrt(np.sum(difs**2,axis=-1)))
+                min_L1_dist = np.min(np.sqrt(np.sum(difs**2,axis=-1))) #N.N. distance
                 min_L1_dists.append(min_L1_dist)
             min_L1_dists = np.array(min_L1_dists)#nearest neighbour distance across hybes for point in reference hybe
-
             projection = np.dot(possible_projections_,min_L1_dists)
             projections_point.append(projection)
-        ##After computing a no of candidate chromosomes x no of points weight matrix projections_point
-        ## Decide on best assigment.
+        ##After computing #candidate chromosomes x #points in hybe weight matrix (projections_point),
+        ##decide on best assigment.
         chr_picks = unique_classif(projections_point,conf=None)
-        
-        
         points_identities,chr_identities = zip(*chr_picks)
-        #chr_identities goes from 0 to number of chromosomes is ref hybe in maximum confidence order
+        #chr_identities goes from 0 to number of chromosomes in ref hybe, ordered by assignment confidence
         chromosome_ids0 = np.arange(len(points_identities))
         chromosome_ids0[np.array(points_identities)]=np.array(chr_identities)
-        chromosome_ids = possible_chrs[chromosome_ids0]%n_chr
+        chromosome_ids = possible_chrs[chromosome_ids0]%n_chr #homologous chromosomes are ambiguously identified, because their barcodes are identical
         chromosome_ids_all.append(chromosome_ids)
-        #chromosome_ids is chromosome prediction (0-22) in order of the points in ref hybe.
+        #chromosome_ids is chromosome prediction (0-22, if n_chr=23) in order of the points in ref hybe.
         #Compare to ground truth calculated during simulation of imaging data.
         non_deg_poss=np.array(tot_ground_truth[id_ref])%n_chr
         good = np.sum(non_deg_poss==chromosome_ids) #up to degeneracy due to homologous chromosomes
         bad = np.sum(non_deg_poss!=chromosome_ids)
         goods+=good
-        bads+=bad
-                      
+        bads+=bad                     
     return goods,bads,chromosome_ids_all
+
 def refine_decoder(hybes_points,hybes,prev_decoder_output,tot_ground_truth,n_chr=23,noTads=100,fr_nn=0.8):
+    """
+    Takes decoded data and refines it to reduce errors. Assignment uses a modified weight matrix, based on median nearest neighbor distances
+    and the previous (existing) chr assignment
+    Inputs:
+    hybes_points - the spatial position (imaging data) of imaged TADs in each hybe (see above)
+    hybes - the encoding scheme for each chromosome in each hybe (see above)
+    prev_decoder_output - list of #hybes lists with #pts entries corresponding to chr identities of each data point from a previous decoding
+    tot_ground_truth - the actual chromosome association of each point in hybes_points
+    n_chr - number of non-homologous chrs
+    noTads - number of TADs in each chr
+    fr_nn - the fraction of TADs in each chr to be used as nearest neighbors for the refinement
+    Returns
+    goods, bads - number of correct and incorrect chr assignment made by the decoder (compared to ground truth), respectively
+    chromosome_ids_all - list of #hybes lists with #pts entries corresponding to chr identities of each data point after refinement
+    """
     point_col = flatten(hybes_points)
     chr_col = flatten(prev_decoder_output)
     point_part = partition_map(point_col,chr_col)
@@ -382,32 +406,25 @@ def refine_decoder(hybes_points,hybes,prev_decoder_output,tot_ground_truth,n_chr
     possible_chrs_hybes=[]
     for hybe in hybes:
         possible_chrs_hybes.append(np.where(hybe>0)[0]%n_chr)
-    ##
     goods,bads=0,0
     chromosome_ids_all = []
-    #Iterate through all the points in the hybes. The current hybe I call it ref hybe
+    #Iterate through all the points in each hybe. The current hybe is id_ref
     for id_ref in range(len(hybes_points)):
-        ###Given id_ref hybe compute the projection space
-        hybes_points_ref = hybes_points[id_ref]
-        
-        possible_chrs = possible_chrs_hybes[id_ref]#np.where(hybes[id_ref]>0)[0]
+        hybes_points_ref = hybes_points[id_ref]       
+        possible_chrs = possible_chrs_hybes[id_ref]
         weight_chr = []
         for point in hybes_points_ref:
-            min_L1_dists=[]#distances to nearest neighbors across hybes for point
-            for pos_chr in possible_chrs:
+            med_L1_dists=[]
+            for pos_chr in possible_chrs: #calculate median distance for each chr
                 difs = [point] - np.array(point_part[pos_chr],dtype=float)
                 dists = np.sqrt(np.sum(difs**2,axis=-1))
-                dists = np.sort(dists)[:int(noTads*fr_nn)]
-                #min_L1_dist = np.min(np.sum(np.abs(difs),axis=-1))
-                min_L1_dist = np.median(dists)
-                min_L1_dists.append(min_L1_dist)
-            min_L1_dists = np.array(min_L1_dists)#nearest neighbour distance across hybes for point in reference hybe
-            weight_chr.append(min_L1_dists)
-        ##After computing a no of candidate chromosomes x no of points weight matrix projections_point
-        ## Decide on best assigment.
+                dists = np.sort(dists)[:int(noTads*fr_nn)] #keep fr_nn*noTads nearest distances
+                med_L1_dist = np.median(dists)
+                med_L1_dists.append(med_L1_dist)
+            med_L1_dists = np.array(med_L1_dists) #median distance to nearest neighbors in each chr for each point in hybe
+            weight_chr.append(med_L1_dists)
+        ##After computing a no of candidate chromosomes x no of points weight matrix, decide on best assigment.
         chr_picks = unique_classif(weight_chr,conf=None)
-        
-        
         points_identities,chr_identities = zip(*chr_picks)
         #chr_identities goes from 0 to number of chromosomes is ref hybe in maximum confidence order
         chromosome_ids0 = np.arange(len(points_identities))
@@ -422,48 +439,54 @@ def refine_decoder(hybes_points,hybes,prev_decoder_output,tot_ground_truth,n_chr
         goods+=good
         bads+=bad     
     return goods,bads,chromosome_ids_all
-def separator(im_data,interp,truth,num_chr=23,num_hom=2):
-    im_data_enhanced = map(list,im_data)
-    for ihybe in range(len(im_data_enhanced)):
-        im_data_enhanced_hybe = im_data_enhanced[ihybe]
-        for ipoint in range(len(im_data_enhanced_hybe)):
-            point = im_data_enhanced_hybe[ipoint]
-            point = list(point)+[ihybe,ipoint]
-            im_data_enhanced_hybe[ipoint] = point
-        im_data_enhanced[ihybe] = im_data_enhanced_hybe
+
+def separator(hybes_points,decoded_data,tot_ground_truth,num_chr=23,num_hom=2):
+    """
+    Takes decoded data and separates copies of the homologous chromosomes
+    Inputs:
+    hybes_points - see above
+    decoded_data - chromosome_ids_all (see above) after refinement, but with degeneracy of homologous chrs
+    tot_ground_truth - see above
+    num_chr - number of non-homologous chrs
+    num_hom - number of homologous copies of each chr
+    Returns
+    correct,incorrect - number of correct and incorrect assignments, taking into consideration that homologues are indistinguishable
+    decoded_data_hom - same as decoded_data, excpt homologous chrs are distinguished from each other (ids of homologues are separated by
+    multiples of num_chr. Fpr example, the homologues of chr 0 will be 23, 46 etc.)
+    """
+    data_pt_list = map(list,hybes_points) #list of x,y,z positions in each hybe
+    for ihybe in range(len(data_pt_list)):
+        data_pt_list_hybe = data_pt_list[ihybe] #pts in current hybe
+        for ipoint in range(len(data_pt_list_hybe)):
+            point = data_pt_list_hybe[ipoint]
+            point = list(point)+[ihybe,ipoint] #keep pt position, hybe# and point id#
+            data_pt_list_hybe[ipoint] = point
+        data_pt_list[ihybe] = data_pt_list_hybe #add information about hybe# and pt id# to data points
     #iterate through chromosomes to patition the data
     pts_chrs,chr_hybes = [],[]
-    for pts_hybe,chr_hybe in zip(im_data_enhanced,interp):
+    for pts_hybe,chr_hybe in zip(data_pt_list,decoded_data):
         pts_chr_ = partition_map(pts_hybe,chr_hybe)
         chr_hybe_ = np.unique(chr_hybe)
         pts_chrs.extend(pts_chr_)
         chr_hybes.extend(chr_hybe_)
     pts_partitioned = partition_map(pts_chrs,chr_hybes)
     chrs_ids = np.unique(chr_hybes)
-
-    interp_hom = map(np.array,interp)
-    #iterate through chromosome ids
+    decoded_data_hom = map(np.array,decoded_data)
+    #iterate through chromosome ids and separate the homologues of each chr
     for chrs_id,pts_partitioned_ in zip(chrs_ids,pts_partitioned):
-        #chrs_id = chrs_ids[1]
-        #pts_partitioned_ = pts_partitioned[1]
-
-        id_hybe_start = np.argsort(map(len,pts_partitioned_))[-1]
+        id_hybe_start = np.argsort(map(len,pts_partitioned_))[-1] #start with a hybe containing all copies of the TADs from the current chr
         pts_start = pts_partitioned_[id_hybe_start]
         assert len(pts_start)==num_hom
-        #split_chr = split_dic[chrs_id]
-        #for ipt,pt in enumerate(pts_start):
-        #    split_chr[ipt].append(pt)
-
         pts_tobeasigned = list(pts_partitioned_)
-        pts_tobeasigned.pop(id_hybe_start)
-
+        pts_tobeasigned.pop(id_hybe_start) #don't reassign the initiator
         chr_estim = [[list(val)+[ival]for ival,val in enumerate(pts_partitioned_[id_hybe_start])]]
-
-        for pts_hybe in pts_tobeasigned:
-            mean_dists_hybe = []
+        #assign the points in the above hybe to separate homologues - these will serve as seeds to segregate the other chrs
+        for pts_hybe in pts_tobeasigned: #go over all remaining hybes
+            med_dists_hybe = []
             chr_estim_flat = np.array(flatten(chr_estim))
-            split_chr = partition_map(chr_estim_flat,chr_estim_flat[:,-1])
+            split_chr = partition_map(chr_estim_flat,chr_estim_flat[:,-1]) #buckets with already segregated points
             for pt in pts_hybe:
+<<<<<<< HEAD
                 mean_dists = [np.median([np.sqrt(np.sum((pt[:3]-pt_t[:3])**2)) for pt_t in split_]) for split_ in split_chr]
                 #mean_dists has num of homolog dists
                 mean_dists_hybe.append(mean_dists)
@@ -483,23 +506,50 @@ def separator(im_data,interp,truth,num_chr=23,num_hom=2):
             
             
         #Return the sames as interp(chromosme_id_all) but dealt with degeneracy
+=======
+                med_dists = [np.median([np.sqrt(np.sum((pt[:3]-pt_t[:3])**2)) for pt_t in split_]) for split_ in split_chr]
+                #med_dists has num of homolog dists - the median distance of the current point to the points assigned to each
+                #homologue so far
+                med_dists_hybe.append(med_dists)
+            picks = unique_classif(med_dists_hybe) #assign each TAD to one of the homologues based on their relative proximities
+            chr_estim.append([list(pts_hybe[pick[0]][:])+[pick[1]] for pick in picks]) #add the data point with an extra number (hom#)
+        chr_estim_new = chr_estim #variable for refinement loop
+        no_iter = 0
+        no_max_iter =10
+        while True:
+            no_iter+=1
+            if no_iter>no_max_iter:
+                break
+            no_flips,chr_estim_new = refine_separator(chr_estim_new) #no. of changes made in refinement and refined separation
+            if no_flips==0:
+                break #keep going until no more changes are made
+>>>>>>> 2a82054c4f98280ab474d7d5a769d7699c00311f
         for pt in flatten(chr_estim_new):
-            interp_hom[pt[3]][pt[4]]+=pt[-1]*num_chr
-        correct,incorrect = compare_to_truth(interp_hom,truth,num_hom=num_hom,num_chr=num_chr)
-    return correct,incorrect,interp_hom
-def refine_separator(chr_estim):
+            decoded_data_hom[pt[3]][pt[4]]+=pt[-1]*num_chr #modify chr identity matrix to separate homologues by multiples of num_chr
+        correct,incorrect = compare_to_truth(decoded_data_hom,tot_ground_truth,num_hom=num_hom,num_chr=num_chr)
+        #compare to ground truth, taking into account equivalence of homologous chrs
+    return correct,incorrect,decoded_data_hom
+
+def refine_separator(chr_estim): ###weight and classification method is the same as separator (see above), except using complete hom assigments
+    """
+    Refining function for separation of homologues
+    Inputs:
+    chr_estim - list of points, each line containing x,y,z position, #hybe, point id# and all previous rounds of hom assigment
+    Returns:
+    no_flips - the number of changes made during the refinement
+    chr_estim_new - same as input, but with an extra data point of the new hom assigment
+    """
     chr_estim_flat = np.array(flatten(chr_estim))
     split_chr = partition_map(chr_estim_flat,chr_estim_flat[:,-1])
     chr_estim_new=[]
     for pts_hybe in chr_estim:
-        mean_dists_hybe = []
+        med_dists_hybe = []
         for pt in pts_hybe:
-            mean_dists = [np.median([np.sqrt(np.sum((pt[:3]-pt_t[:3])**2)) for pt_t in split_]) for split_ in split_chr]
-            #mean_dists has num of homolog dists
-            mean_dists_hybe.append(mean_dists)
-        picks = unique_classif(mean_dists_hybe)
+            med_dists = [np.median([np.sqrt(np.sum((pt[:3]-pt_t[:3])**2)) for pt_t in split_]) for split_ in split_chr]
+            #med_dists has num of homolog dists
+            med_dists_hybe.append(med_dists)
+        picks = unique_classif(med_dists_hybe)
         chr_estim_new.append([list(pts_hybe[pick[0]][:])+[pick[1]] for pick in picks])
-
     chr_estim_flat = np.array(flatten(chr_estim))
     chr_estim_flat_new = np.array(flatten(chr_estim_new))  
     reind_old = np.argsort(chr_estim_flat[:,0])
@@ -507,25 +557,32 @@ def refine_separator(chr_estim):
     pos_dif = np.where(chr_estim_flat[reind_old,-1]!=chr_estim_flat_new[reind_new,-1])[0]
     no_flips = len(pos_dif)
     return no_flips,chr_estim_new
-def compare_to_truth(interpsep,truth,num_chr=23,num_hom=2):
-    pairs = []
-    for hb in range(len(interpsep)):
-        pairs.extend(zip(interpsep[hb],truth[hb]))
-    chrs_pairs = partition_map(pairs,[pair[-1]%num_chr for pair in pairs])
 
-    import itertools
+def compare_to_truth(decoded_data_hom,tot_ground_truth,num_chr=23,num_hom=2):
+    """
+    Function for comparing homologue assigment to ground truth
+    Inputs:
+    decoded_data_hom - chr identities with homs separated
+    tot_ground_truth - ground truth of identities (see above)
+    num_chr - number of non-homologous chrs
+    num_hom - number of homs for each chr
+    Returns:
+    correct,total-correct - the number of correct assignments and incorrect (complete to ctotal#) assignments
+    """
+    pairs = []
+    for hb in range(len(decoded_data_hom)): #run on all hybes
+        pairs.extend(zip(decoded_data_hom[hb],tot_ground_truth[hb]))
+    chrs_pairs = partition_map(pairs,[pair[-1]%num_chr for pair in pairs])
     permuts = np.array(list(itertools.permutations(range(num_hom))))
-    
-    total = np.sum(map(len,truth))
+    #since homs are indistinguishable, keep all permutations of them for robust comparison    
+    total = np.sum(map(len,tot_ground_truth))
     correct = 0
     for chr_pairs in chrs_pairs:
         chr_pairs = np.array(chr_pairs,dtype=int)
-
         id_chrs_truth = np.unique(chr_pairs[:,1])
-
         perm_values = []
         for permut in permuts:
             id_chrs_data = id_chrs_truth[permut]
             perm_values.append(np.sum([np.sum((chr_pairs[:,0]==idd)*(chr_pairs[:,1]==idt)) for idd,idt in zip(id_chrs_data,id_chrs_truth)]))
-        correct+=np.max(perm_values)
+        correct+=np.max(perm_values) #find the permutation on hom chr id that best matches ground truth and designate it as our interpretation
     return correct,total-correct
