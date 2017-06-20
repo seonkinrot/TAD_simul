@@ -486,27 +486,6 @@ def separator(hybes_points,decoded_data,tot_ground_truth,num_chr=23,num_hom=2):
             chr_estim_flat = np.array(flatten(chr_estim))
             split_chr = partition_map(chr_estim_flat,chr_estim_flat[:,-1]) #buckets with already segregated points
             for pt in pts_hybe:
-<<<<<<< HEAD
-                mean_dists = [np.median([np.sqrt(np.sum((pt[:3]-pt_t[:3])**2)) for pt_t in split_]) for split_ in split_chr]
-                #mean_dists has num of homolog dists
-                mean_dists_hybe.append(mean_dists)
-            picks = unique_classif(mean_dists_hybe)
-            chr_estim.append([list(pts_hybe[pick[0]][:])+[pick[1]] for pick in picks])
-
-        chr_estim_new = chr_estim
-        no_max_improv = 10
-        no_improv=0
-        while True:
-            if no_improv>no_max_improv:
-                break
-            no_flips,chr_estim_new = refine_separator(chr_estim_new)
-            no_improv+=1
-            if no_flips==0:
-                break
-            
-            
-        #Return the sames as interp(chromosme_id_all) but dealt with degeneracy
-=======
                 med_dists = [np.median([np.sqrt(np.sum((pt[:3]-pt_t[:3])**2)) for pt_t in split_]) for split_ in split_chr]
                 #med_dists has num of homolog dists - the median distance of the current point to the points assigned to each
                 #homologue so far
@@ -523,7 +502,6 @@ def separator(hybes_points,decoded_data,tot_ground_truth,num_chr=23,num_hom=2):
             no_flips,chr_estim_new = refine_separator(chr_estim_new) #no. of changes made in refinement and refined separation
             if no_flips==0:
                 break #keep going until no more changes are made
->>>>>>> 2a82054c4f98280ab474d7d5a769d7699c00311f
         for pt in flatten(chr_estim_new):
             decoded_data_hom[pt[3]][pt[4]]+=pt[-1]*num_chr #modify chr identity matrix to separate homologues by multiples of num_chr
         correct,incorrect = compare_to_truth(decoded_data_hom,tot_ground_truth,num_hom=num_hom,num_chr=num_chr)
