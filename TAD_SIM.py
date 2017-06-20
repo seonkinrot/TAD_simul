@@ -482,7 +482,7 @@ def separator(hybes_points,decoded_data,tot_ground_truth,num_chr=23,num_hom=2):
         chr_estim = [[list(val)+[ival]for ival,val in enumerate(pts_partitioned_[id_hybe_start])]]
         #assign the points in the above hybe to separate homologues - these will serve as seeds to segregate the other chrs
         for pts_hybe in pts_tobeasigned: #go over all remaining hybes
-            mean_dists_hybe = []
+            med_dists_hybe = []
             chr_estim_flat = np.array(flatten(chr_estim))
             split_chr = partition_map(chr_estim_flat,chr_estim_flat[:,-1]) #buckets with already segregated points
             for pt in pts_hybe:
@@ -521,7 +521,7 @@ def refine_separator(chr_estim): ###weight and classification method is the same
     split_chr = partition_map(chr_estim_flat,chr_estim_flat[:,-1])
     chr_estim_new=[]
     for pts_hybe in chr_estim:
-        mean_dists_hybe = []
+        med_dists_hybe = []
         for pt in pts_hybe:
             med_dists = [np.median([np.sqrt(np.sum((pt[:3]-pt_t[:3])**2)) for pt_t in split_]) for split_ in split_chr]
             #med_dists has num of homolog dists
