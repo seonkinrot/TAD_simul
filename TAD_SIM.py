@@ -317,7 +317,7 @@ def unique_classif(w_matrix,conf=None):
         weight_matrix = weight_matrix[:,chr_ind_keep] #killing rows and columns
     return chr_picks
 #Decoder - Given hybes_points and hybes predict chr id
-def decoder(hybes_points,hybes,tot_ground_truth,no_hom=1,n_chr=23):
+def decoder(hybes_points,hybes,tot_ground_truth,n_chr=23):
     #What chromosomes appear in which hybe
     possible_chrs_hybes=[]
     for hybe in hybes:
@@ -374,8 +374,8 @@ def decoder(hybes_points,hybes,tot_ground_truth,no_hom=1,n_chr=23):
         bads+=bad
                       
     return goods,bads,chromosome_ids_all
-def refine_decoder(hybes_points,hybes,prev_decoder_output,tot_ground_truth,no_hom=1,n_chr=23,noTads=100,fr_nn=0.8):
-    point_col = flatten(im_data)
+def refine_decoder(hybes_points,hybes,prev_decoder_output,tot_ground_truth,n_chr=23,noTads=100,fr_nn=0.8):
+    point_col = flatten(hybes_points)
     chr_col = flatten(prev_decoder_output)
     point_part = partition_map(point_col,chr_col)
     #What chromosomes appear in which hybe
@@ -422,3 +422,103 @@ def refine_decoder(hybes_points,hybes,prev_decoder_output,tot_ground_truth,no_ho
         goods+=good
         bads+=bad     
     return goods,bads,chromosome_ids_all
+def separator(im_data,interp,truth,num_chr=23,num_hom=2):
+    im_data_enhanced = map(list,im_data)
+    for ihybe in range(len(im_data_enhanced)):
+        im_data_enhanced_hybe = im_data_enhanced[ihybe]
+        for ipoint in range(len(im_data_enhanced_hybe)):
+            point = im_data_enhanced_hybe[ipoint]
+            point = list(point)+[ihybe,ipoint]
+            im_data_enhanced_hybe[ipoint] = point
+        im_data_enhanced[ihybe] = im_data_enhanced_hybe
+    #iterate through chromosomes to patition the data
+    pts_chrs,chr_hybes = [],[]
+    for pts_hybe,chr_hybe in zip(im_data_enhanced,interp):
+        pts_chr_ = partition_map(pts_hybe,chr_hybe)
+        chr_hybe_ = np.unique(chr_hybe)
+        pts_chrs.extend(pts_chr_)
+        chr_hybes.extend(chr_hybe_)
+    pts_partitioned = partition_map(pts_chrs,chr_hybes)
+    chrs_ids = np.unique(chr_hybes)
+
+    interp_hom = map(np.array,interp)
+    #iterate through chromosome ids
+    for chrs_id,pts_partitioned_ in zip(chrs_ids,pts_partitioned):
+        #chrs_id = chrs_ids[1]
+        #pts_partitioned_ = pts_partitioned[1]
+
+        id_hybe_start = np.argsort(map(len,pts_partitioned_))[-1]
+        pts_start = pts_partitioned_[id_hybe_start]
+        assert len(pts_start)==num_hom
+        #split_chr = split_dic[chrs_id]
+        #for ipt,pt in enumerate(pts_start):
+        #    split_chr[ipt].append(pt)
+
+        pts_tobeasigned = list(pts_partitioned_)
+        pts_tobeasigned.pop(id_hybe_start)
+
+        chr_estim = [[list(val)+[ival]for ival,val in enumerate(pts_partitioned_[id_hybe_start])]]
+
+        for pts_hybe in pts_tobeasigned:
+            mean_dists_hybe = []
+            chr_estim_flat = np.array(flatten(chr_estim))
+            split_chr = partition_map(chr_estim_flat,chr_estim_flat[:,-1])
+            for pt in pts_hybe:
+                mean_dists = [np.median([np.sqrt(np.sum((pt[:3]-pt_t[:3])**2)) for pt_t in split_]) for split_ in split_chr]
+                #mean_dists has num of homolog dists
+                mean_dists_hybe.append(mean_dists)
+            picks = unique_classif(mean_dists_hybe)
+            chr_estim.append([list(pts_hybe[pick[0]][:])+[pick[1]] for pick in picks])
+
+        chr_estim_new = chr_estim
+        while True:
+            no_flips,chr_estim_new = refine_separator(chr_estim_new)
+            if no_flips==0:
+                break
+        #Return the sames as interp(chromosme_id_all) but dealt with degeneracy
+        for pt in flatten(chr_estim_new):
+            interp_hom[pt[3]][pt[4]]+=pt[-1]*num_chr
+        correct,incorrect = compare_to_truth(interp_hom,truth,num_hom=num_hom,num_chr=num_chr)
+    return correct,incorrect,interp_hom
+def refine_separator(chr_estim):
+    chr_estim_flat = np.array(flatten(chr_estim))
+    split_chr = partition_map(chr_estim_flat,chr_estim_flat[:,-1])
+    chr_estim_new=[]
+    for pts_hybe in chr_estim:
+        mean_dists_hybe = []
+        for pt in pts_hybe:
+            mean_dists = [np.median([np.sqrt(np.sum((pt[:3]-pt_t[:3])**2)) for pt_t in split_]) for split_ in split_chr]
+            #mean_dists has num of homolog dists
+            mean_dists_hybe.append(mean_dists)
+        picks = unique_classif(mean_dists_hybe)
+        chr_estim_new.append([list(pts_hybe[pick[0]][:])+[pick[1]] for pick in picks])
+
+    chr_estim_flat = np.array(flatten(chr_estim))
+    chr_estim_flat_new = np.array(flatten(chr_estim_new))  
+    reind_old = np.argsort(chr_estim_flat[:,0])
+    reind_new = np.argsort(chr_estim_flat_new[:,0])
+    pos_dif = np.where(chr_estim_flat[reind_old,-1]!=chr_estim_flat_new[reind_new,-1])[0]
+    no_flips = len(pos_dif)
+    return no_flips,chr_estim_new
+def compare_to_truth(interpsep,truth,num_chr=23,num_hom=2):
+    pairs = []
+    for hb in range(len(interpsep)):
+        pairs.extend(zip(interpsep[hb],truth[hb]))
+    chrs_pairs = partition_map(pairs,[pair[-1]%num_chr for pair in pairs])
+
+    import itertools
+    permuts = np.array(list(itertools.permutations(range(num_hom))))
+    
+    total = np.sum(map(len,truth))
+    correct = 0
+    for chr_pairs in chrs_pairs:
+        chr_pairs = np.array(chr_pairs,dtype=int)
+
+        id_chrs_truth = np.unique(chr_pairs[:,1])
+
+        perm_values = []
+        for permut in permuts:
+            id_chrs_data = id_chrs_truth[permut]
+            perm_values.append(np.sum([np.sum((chr_pairs[:,0]==idd)*(chr_pairs[:,1]==idt)) for idd,idt in zip(id_chrs_data,id_chrs_truth)]))
+        correct+=np.max(perm_values)
+    return correct,total-correct
