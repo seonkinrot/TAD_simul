@@ -471,10 +471,17 @@ def separator(im_data,interp,truth,num_chr=23,num_hom=2):
             chr_estim.append([list(pts_hybe[pick[0]][:])+[pick[1]] for pick in picks])
 
         chr_estim_new = chr_estim
+        no_max_improv = 10
+        no_improv=0
         while True:
+            if no_improv>no_max_improv:
+                break
             no_flips,chr_estim_new = refine_separator(chr_estim_new)
+            no_improv+=1
             if no_flips==0:
                 break
+            
+            
         #Return the sames as interp(chromosme_id_all) but dealt with degeneracy
         for pt in flatten(chr_estim_new):
             interp_hom[pt[3]][pt[4]]+=pt[-1]*num_chr
