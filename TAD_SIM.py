@@ -1,5 +1,5 @@
 """
-Authors: Seon Ksdsad, Bogdan Bintu
+Authors: Seon Kinrot, Bogdan Bintu
 This are the functions for TAD simulations of whole chromosomes in a cell
 """
 #Dependencies
