@@ -10,6 +10,17 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button, RadioButtons
 import cPickle as pickle
 #Useful functions
+def plot3D(xs, ys, zs,fig=None,ax=None,**kwargs):
+    from mpl_toolkits.mplot3d import Axes3D
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(xs, ys, zs,**kwargs)
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    return fig,ax
 def imshow3d(Im, axis=0, **kwargs):
     """
     Display a 3d ndarray with a slider to move along the 0th dimension.
@@ -156,7 +167,7 @@ def chromosomes(nuc_dia=10000,pixel_sz=100,nchr=46,return_im=False,plt_val=False
     return chrters
 
 def TAD_blur(xyzPos,pix_sz=100,nuc_dia=10000): ###add random 3D Gaussian to pixelized TAD location
-    perturb=np.random.normal(0,pix_sz/2./(nuc_dia/2.),3)
+    perturb=np.random.normal(0,pix_sz/2./(nuc_dia/2.),3)#unit radius
     return perturb+xyzPos
 
 def TAD_generator(xyzChr,noTADs=100,udist=-0.44276236166846844,sigmadist=0.57416477624326434,nuc_dia=10000,pix_sz=100):
@@ -166,7 +177,7 @@ def TAD_generator(xyzChr,noTADs=100,udist=-0.44276236166846844,sigmadist=0.57416
     udist, sigmadist are the lognormal mean and variance of the distance distribution from consecutive TADs, calculated from
     actual data on chr 21 and 22 (Steven's published data), in units of log(um)
     nuc_dia, pix_sz are the nuclear diamater and pixel size in nm (see above)
-    Returns an array of dimensions noTADSx3, representing the 3D location of all TADs in a chromosome
+    Returns an array of dimensions noTADSx3, representing the 3D location of all TADs in a chromosome in nm
     """
     xyzChr_=np.array(xyzChr)
     tads=[]
@@ -182,9 +193,9 @@ def TAD_generator(xyzChr,noTADs=100,udist=-0.44276236166846844,sigmadist=0.57416
         weights = weights/float(np.max(weights))
         index_pj = np.sum(np.random.rand()-weights>0)
         pj=xyzChr_[index_pj]#unit radius
-        pj=TAD_blur(pj)
+        pj=TAD_blur(pj,pix_sz=pix_sz,nuc_dia=nuc_dia)#unit radius
         tads.append(pj)
-    return np.array(tads)
+    return np.array(tads,dtype=float)*nuc_dia/2.#unit nm
     
 #Encoder - construct a matrix hybes of length number of hybes x number of chromosomes 
 #each containing the id of the tad in the hybe (0 means the TAD is missing from that hybe)
@@ -248,6 +259,50 @@ def code_encoder(nchr=23,ntads=100,nlabel_=2,no_hom=1):
     hybes=np.cumsum(codes,axis=0)*codes
     hybes=np.concatenate([hybes.T]*no_hom).T
     return hybes
+def code_encoder_rep(nchr=23,ntads=100,nlabel_=2,no_hom=1):
+    """Master function for the encoder with repetition
+    nchr is the number of *unique* - i.e. non-homologous - chromosomes
+    no_hom is the number of homologous chromosomes
+    nlabel is the numbr of TADs labeled in each hybe
+    #Interpretation of codes: codes is number of hybe x number of chromosomes and indicates which chr is present in each hybe
+    #Interpretation of hybes: hybes is number of hybe x number of chromosomes and indicates which TAD is present in each hybe
+    #                         0 means chromose not appearing and if not 0 then it encodes which TAD from the chr appears
+    Return hybes
+    
+    ###Example use:
+    hybes = code_encoder(nchr=23,ntads=100,nlabel_=10)
+    """
+    combs = list(itertools.combinations(range(nchr),nlabel_))
+    nhybes = 2*int(float(nchr)*ntads/nlabel_+1)
+    inds = np.array(np.round(np.linspace(0,len(combs)-1,nhybes)),dtype=int)
+    combs_eq_sp = [combs[ind] for ind in inds]
+    codes = combs_to_code(combs_eq_sp)
+    codes[:codes.shape[0]/2] = patch_code(codes[:codes.shape[0]/2],target=ntads)
+    codes[codes.shape[0]/2:] = patch_code(codes[codes.shape[0]/2:],target=ntads)
+    assert test_code(codes)
+    codes1 = codes[:codes.shape[0]/2]
+    codes2 = codes[codes.shape[0]/2:]
+    hybes1=np.cumsum(codes1,axis=0)*codes1
+    hybes2=np.cumsum(codes2,axis=0)*codes2
+    def shift_hybe(hybe,shift=0):
+        hybes_t = np.array(hybe)
+        hybes_tT = (hybes_t+shift)%ntads
+        hybes_tT[hybes_tT==0]=ntads
+        hybes_tT = hybes_tT*(hybes_t>0)
+        return hybes_tT
+    for ichr in range(hybes2.shape[-1]):
+        hybes2[:,ichr]=shift_hybe(hybes2[:,ichr],shift=ichr*ntads/nchr)
+    ninters = 0
+    for hybe1_t in hybes1:
+        for hybe2_t in hybes2:
+            inters = ((hybe1_t==hybe2_t)*hybe1_t*hybe2_t)>0
+            ninters_ = np.sum(inters)
+            if ninters_>1:
+                ninters+=ninters_*(ninters_-1)/2
+    print "No. of collisions (pairs of TADs appearing in the same hybe in repeat):"+str(ninters)
+    hybes = np.concatenate([hybes1,hybes2])
+    hybes=np.concatenate([hybes.T]*no_hom).T
+    return hybes
 def partition_map(list_,map_):
     """
     Inputs
@@ -258,17 +313,21 @@ def partition_map(list_,map_):
     list__=np.array(list_,dtype=object)
     map__=np.array(map_)
     return [list(list__[map__==element]) for element in np.unique(map__)]
-def simulated_imdata(hybes,cell,err_rate=0.032504222398951552):
+def simulated_imdata(hybes,cell,err_rate=0.032504222398951552,sigma=50.):
     """
     Inputs:
     hybes is the encoding(see above)
-    cell is ground truth for single cell (no_of_chr x no_of_TADS x 3)
+    cell is ground truth for single cell (no_of_chr x no_of_TADS x 3) Note: cell should be in nm
     err_rate is the rate at which a TAD is missed (averaged over 4 chromosomes from Steven's published data)
     Returns:
     hybes_points
     a list of dim no_of_hybes with lists of x,y,z points - the simulated imaging data
     tot_ground_truth is the chromosome identity of all imaged points per hybe
     """
+    def point_blur(xyzPos,sigma=sigma): ###add random 3D Gaussian to a point
+        perturb=np.random.normal(0,sigma,len(xyzPos))
+        return perturb+np.array(xyzPos,dtype=float)
+    
     hybes_points,tot_ground_truth=[],[]
     for hybe in hybes:
         chrs_in_hybe = np.where(hybe>0)[0]
@@ -276,7 +335,7 @@ def simulated_imdata(hybes,cell,err_rate=0.032504222398951552):
         hybe_points,ground_truth=[],[]
         for chr_in_hybe,tad_in_hybe in zip(chrs_in_hybe,tad_ids_in_hybe):
             if np.random.rand()>err_rate: #probability of missing a TAD in imaging
-                hybe_points.append(cell[chr_in_hybe][tad_in_hybe])
+                hybe_points.append(point_blur(cell[chr_in_hybe][tad_in_hybe]))
                 ground_truth.append(chr_in_hybe)
         hybes_points.append(hybe_points)
         tot_ground_truth.append(ground_truth)
@@ -315,7 +374,224 @@ def unique_classif(w_matrix,conf=None):
         weight_matrix = weight_matrix[point_ind_keep,:]
         weight_matrix = weight_matrix[:,chr_ind_keep] #killing rows and columns
     return chr_picks
+def unique_classif_rep(w_matrix,nuc_diam=10000.):
+    """
+    Given a weight matrix and a confidence function (optional) operation on 0th dimention compute the best unique classification
+    and return it as pairs.
+    """
+    def conf_rep(proj_stitch_vec):
+        proj_vec,stich_vec=proj_stitch_vec.T
+        no_stich = np.sum(stich_vec)
+        proj_vec_sort = np.sort(proj_vec)
+        if len(proj_vec_sort)<2:
+            return 0,0.,0
+        conf_=proj_vec_sort[1]-proj_vec_sort[0]
+
+        if no_stich==1:
+            id1_stitch = np.where(stich_vec)[0][0]
+            idmin_proj = np.argmin(proj_vec)
+            if idmin_proj==id1_stitch:
+                #one 1 aligned to min dist - class A
+                class_=3
+                best_id=idmin_proj
+            else:
+                #one 1 not aligned to min dist - class D
+                class_=0
+                best_id=idmin_proj
+        if no_stich==0:
+            #no 1s, class C
+            class_=1
+            best_id=np.argmin(proj_vec)
+        if no_stich>1:
+            id1_stitch = np.where(stich_vec)[0]
+            idmin_proj = np.argmin(proj_vec)
+            if idmin_proj in id1_stitch:
+                #multiple 1s, one matching min dist - class B
+                class_=2
+                inds = np.arange(len(proj_vec))[id1_stitch]
+                best_id=inds[np.argmin(proj_vec[id1_stitch])]
+            else:
+                #multiple 1s but none match min dist - class D
+                class_=0
+                best_id = idmin_proj
+        return class_,conf_,best_id
+    
+    weight_matrix=np.array(w_matrix)
+    point_ids = np.arange(weight_matrix.shape[0])
+    chr_ids = np.arange(weight_matrix.shape[1])
+
+    chr_picks=[]
+    while weight_matrix.shape[0]>0 and weight_matrix.shape[1]>0:
+        confs_classes = map(conf_rep,weight_matrix)# list of confidence for the remaining points across the remaining chrs.
+        confs = [class_*2*nuc_diam+conf_ for class_,conf_,_ in confs_classes]
+        
+        point_ind = np.argmax(confs)# the id of the point with the highest confidence
+
+        chr_ind =  confs_classes[point_ind][-1] # the id ot the chromosome assiged to the most confident point
+        chr_picks.append((point_ids[point_ind],chr_ids[chr_ind])) #keep above pair
+
+        point_ind_keep = np.setdiff1d(np.arange(weight_matrix.shape[0]),[point_ind])
+        chr_ind_keep = np.setdiff1d(np.arange(weight_matrix.shape[1]),[chr_ind])
+        point_ids = point_ids[point_ind_keep]
+        chr_ids = chr_ids[chr_ind_keep]
+        weight_matrix = weight_matrix[point_ind_keep,:]
+        weight_matrix = weight_matrix[:,chr_ind_keep] #killing rows and columns
+    return chr_picks
+def decoder_rep(hybes_points,hybes,tot_ground_truth,n_chr=23,num_TADs=100,frac_TADs=1.8,cutoff_sameTAD=150.):
+    #Find what chromosomes appear in which hybe
+    possible_chrs_hybes=[]
+    for hybe in hybes:
+        possible_chrs_hybes.append(np.where(hybe>0)[0])
+    #Counter for good/bad when comparing to to_ground_truth up to homologs
+    goods,bads=0,0
+    chromosome_ids_all = []
+    #Iterate through all the points in the hybes. The current hybe is called ref hybe
+    for id_ref in range(len(hybes_points)):
+        ###Given id_ref hybe compute the projection space
+        hybes_points_ref = hybes_points[id_ref] #all points in ref hybe
+        possible_chrs = possible_chrs_hybes[id_ref] #all chrs in ref hybe
+
+        #compute possible projections: possibble chromosome x numbe of hybes - binary
+        possible_projections = np.zeros([len(possible_chrs),len(possible_chrs_hybes)],dtype=bool)
+        for i,chr_T in enumerate(possible_chrs):
+            for j,possible_chrs_hybe in enumerate(possible_chrs_hybes):
+                possible_projections[i,j]=chr_T in possible_chrs_hybe
+        TAD_info = hybes[id_ref][hybes[id_ref]>0] #TAD ids expected in ref hybe
+        ###Compute 
+        projections_point = []
+        stitches_point = []
+        for point in hybes_points_ref:
+            ##Deal with distances to nearest neighbors across hybes for point
+            min_L1_dists=[]
+            for hybe_point in hybes_points:
+                difs = point - hybe_point
+                min_L1_dist = np.min(np.sqrt(np.sum(difs*difs,axis=-1)))
+                min_L1_dists.append(min_L1_dist)
+            min_L1_dists = np.array(min_L1_dists)#nearest neighbour distance across hybes for a point in reference hybe
+
+            ##Deal with projections
+            projection_dists = num_TADs
+            projection = [np.median(np.sort(min_L1_dists[pos_proj])[:int(frac_TADs*num_TADs)]) for pos_proj in possible_projections]#changed to median. Could be mean
+            projections_point.append(projection)
+
+            ##Deal with stitching of repeats
+            stitch=[]
+            for t_chr,tad_id in zip(possible_chrs,TAD_info):
+                has_rep=False
+                for id_rep,hybe in enumerate(hybes):
+                    if hybe[t_chr]==tad_id and id_rep!=id_ref:
+                        #check for repeating TAD
+                        has_rep = min_L1_dists[id_rep]<cutoff_sameTAD
+                        if has_rep:
+                            break
+                stitch.append(has_rep)
+                    
+            stitches_point.append(stitch)
+
+        stitches_point = np.array(stitches_point,dtype=int)
+        projections_point = np.array(projections_point)
+        projections_stitches_point = np.dstack([projections_point,stitches_point])
+
+        ##After computing a no of candidate chromosomes x no of points weight matrix projections_point
+        ## and a candidate chromosomes x no of points stitch matrix
+        ## Decide on best assigment.
+        chr_picks = unique_classif_rep(projections_stitches_point)
+        points_identities,chr_identities = zip(*chr_picks)
+        #chr_identities goes from 0 to number of chromosomes is ref hybe in maximum confidence order
+        chromosome_ids0 = np.arange(len(points_identities))
+        chromosome_ids0[np.array(points_identities)]=np.array(chr_identities)
+        chromosome_ids = possible_chrs[chromosome_ids0]%n_chr
+        chromosome_ids_all.append(chromosome_ids)
+        #chromosome_ids is chromosome prediction (0-22) in order of the points in ref hybe.
+        #Compare to ground truth calculated during simulation of imaging data.
+        non_deg_poss=np.array(tot_ground_truth[id_ref])%n_chr
+        good = np.sum(non_deg_poss==chromosome_ids) #up to degeneracy due to homologous chromosomes
+        bad = np.sum(non_deg_poss!=chromosome_ids)
+        goods+=good
+        bads+=bad
+    return goods,bads,chromosome_ids_all
+def get_hybes_with_chrTAD(chr_,TAD_,hybes,n_chr=23):
+    hybe_no,chr_no = hybes.shape
+    chr__ = chr_
+    chr_ids = []
+    while chr__<chr_no:
+        chr_ids.append(chr__)
+        chr__+=n_chr
+    return np.array(np.where(hybes[:,chr_ids]==TAD_))[0]
+def refine_decoder_rep(hybes_points,hybes,prev_decoder_output,tot_ground_truth,n_chr=23,noTads=100,fr_nn=1.8,cutoff_sameTAD=150.):
+    point_col = flatten(hybes_points)
+    chr_col = flatten(prev_decoder_output)
+    point_part = partition_map(point_col,chr_col)
+    #What chromosomes appear in which hybe
+    possible_chrs_hybes=[]
+    for hybe in hybes:
+        possible_chrs_hybes.append(np.where(hybe>0)[0]%n_chr)
+    ##
+    goods,bads=0,0
+    chromosome_ids_all = []
+    #Iterate through all the points in the hybes. The current hybe I call it ref hybe
+    for id_ref in range(len(hybes_points)):
+        ###Given id_ref hybe compute the projection space
+        hybes_points_ref = hybes_points[id_ref]
+
+        possible_chrs = possible_chrs_hybes[id_ref]#np.where(hybes[id_ref]>0)[0]
+        TAD_info = hybes[id_ref][hybes[id_ref]>0] #TAD ids expected in ref hybe
+        prev_decoder_ref = prev_decoder_output[id_ref]
+
+        #deal with neighbor dist
+        weight_chr = []
+        for ipoint,point in enumerate(hybes_points_ref):
+            min_L1_dists=[]#distances to nearest neighbors across hybes for point
+            for pos_chr in possible_chrs:
+                difs = [point] - np.array(point_part[pos_chr],dtype=float)
+                dists = np.sqrt(np.sum(difs**2,axis=-1))
+                dists = np.sort(dists)[:int(noTads*fr_nn)]#sort and keep only a fraction of distances(the expected fraction)
+                min_L1_dist = np.median(dists)
+                min_L1_dists.append(min_L1_dist)
+            min_L1_dists = np.array(min_L1_dists)#nearest neighbour distance across hybes for point in reference hybe
+            weight_chr.append(min_L1_dists)
+
+        #deal with stitching
+        stitches_chr=[]
+        for ipoint,point in enumerate(hybes_points_ref):
+            stitch_point=[]
+            for chr_,TAD_ in zip(possible_chrs,TAD_info):
+                ##Find the other hybes where the estimated chr and tad appeares // see function get_hybes_with_chrTAD
+                other_hybes_rep = np.setdiff1d(get_hybes_with_chrTAD(chr_,TAD_,hybes,n_chr),id_ref)
+                ##Try to find pair in those hybes, if found a pair add True, if not add False
+                stitch = False
+                for other_hybe in other_hybes_rep:
+                    for point_rep in hybes_points[other_hybe]:
+                        if not stitch:
+                            dist_rep = np.sqrt(np.sum((point_rep-point)**2))
+                            stitch = dist_rep<cutoff_sameTAD
+                stitch_point.append(stitch)
+            stitches_chr.append(stitch_point)
+        ##After computing a no of candidate chromosomes x no of points weight matrix projections_point
+        ## Decide on best assigment.
+        stitches_chr = np.array(stitches_chr,dtype=int)
+        weight_chr = np.array(weight_chr,dtype=float)
+        weight_stitches_chr = np.dstack([weight_chr,stitches_chr])
+
+        chr_picks = unique_classif_rep(weight_stitches_chr)
+
+
+        points_identities,chr_identities = zip(*chr_picks)
+        #chr_identities goes from 0 to number of chromosomes is ref hybe in maximum confidence order
+        chromosome_ids0 = np.arange(len(points_identities))
+        chromosome_ids0[np.array(points_identities)]=np.array(chr_identities)
+        chromosome_ids = possible_chrs[chromosome_ids0]%n_chr
+        chromosome_ids_all.append(chromosome_ids)
+        #chromosome_ids is chromosome prediction (0-22) in order of the points in ref hybe.
+        #Compare to ground truth calculated during simulation of imaging data.
+        non_deg_poss=np.array(tot_ground_truth[id_ref])%n_chr
+        good = np.sum(non_deg_poss==chromosome_ids) #up to degeneracy due to homologous chromosomes
+        bad = np.sum(non_deg_poss!=chromosome_ids)
+        goods+=good
+        bads+=bad
+    return goods,bads,chromosome_ids_all
 #Decoder - Given hybes_points and hybes predict chr id
+
 def decoder(hybes_points,hybes,tot_ground_truth,n_chr=23):
     #What chromosomes appear in which hybe
     possible_chrs_hybes=[]
@@ -373,6 +649,7 @@ def decoder(hybes_points,hybes,tot_ground_truth,n_chr=23):
         bads+=bad
                       
     return goods,bads,chromosome_ids_all
+
 def refine_decoder(hybes_points,hybes,prev_decoder_output,tot_ground_truth,n_chr=23,noTads=100,fr_nn=0.8):
     point_col = flatten(hybes_points)
     chr_col = flatten(prev_decoder_output)
